@@ -73,7 +73,9 @@ func (mc *Collector) LoadInitialData(deviceRepo database.DeviceRepo, ctx context
 		wg.Add(1)
 		go func(w uuid.UUID) {
 			defer wg.Done()
-			smarts, err := deviceRepo.GetSmartAttributeHistory(ctx, w, "forever", 1, 0, nil)
+			// Preserve the one-day aggregation used before this API took an explicit window.
+			// https://github.com/ibizaman/scrutiny/blob/5928d68be79d91431afa937b3b233ed792187a1f/webapp/backend/pkg/database/scrutiny_repository_device_smart_attributes.go#L188-L199
+			smarts, err := deviceRepo.GetSmartAttributeHistory(ctx, w, "forever", 24*time.Hour, 1, 0, nil)
 			if err == nil && len(smarts) > 0 {
 				mu.Lock()
 				smartDataMap[w.String()] = smarts

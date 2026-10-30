@@ -394,6 +394,8 @@ func TestFromCollectorSmartInfo_Fail_ScrutinySmart(t *testing.T) {
 	require.Equal(t, smartUUID, smartMdl.ScrutinyUUID)
 	require.Equal(t, pkg.DeviceStatusFailedScrutiny|pkg.DeviceStatusFailedSmart, smartMdl.Status)
 	require.Equal(t, 17, len(smartMdl.Attributes))
+	require.True(t, pkg.AttributeStatusHas(smartMdl.Attributes["5"].GetStatus(), pkg.AttributeStatusFailedSmart))
+	require.Equal(t, int64(1), smartMdl.Attributes["5"].GetComparableValue())
 }
 
 func TestFromCollectorSmartInfo_Fail_ScrutinyNonCriticalFailed(t *testing.T) {
@@ -511,9 +513,50 @@ func TestFromCollectorSmartInfo_Scsi(t *testing.T) {
 	//assert
 	require.NoError(t, err)
 	require.Equal(t, smartUUID, smartMdl.ScrutinyUUID)
-	require.Equal(t, pkg.DeviceStatusPassed, smartMdl.Status)
+	require.Equal(t, pkg.DeviceStatusFailedScrutiny, smartMdl.Status)
 	require.Equal(t, 13, len(smartMdl.Attributes))
 
 	require.Equal(t, int64(56), smartMdl.Attributes["scsi_grown_defect_list"].(*measurements.SmartScsiAttribute).Value)
+	require.Equal(t, pkg.AttributeStatusFailedScrutiny, smartMdl.Attributes["scsi_grown_defect_list"].GetStatus())
 	require.Equal(t, int64(300357663), smartMdl.Attributes["read_errors_corrected_by_eccfast"].(*measurements.SmartScsiAttribute).Value) //total_errors_corrected
+}
+
+func TestSmartAtaAttribute_ValidateThreshold_BucketBoundaries(t *testing.T) {
+	//setup
+	testCases := []struct {
+		name             string
+		attributeId      int
+		value            int64
+		transformedValue int64
+		rawValue         int64
+		expectedStatus   pkg.AttributeStatus
+		expectedRate     float64
+	}{
+		//https://github.com/AnalogJ/scrutiny/issues/1072 - transformed value 0 falls in the [0, 100] bucket
+		{"attr 188 transformed value 0", 188, 100, 0, 0, pkg.AttributeStatusPassed, 0.024893587674442153},
+		{"attr 188 transformed value 100", 188, 100, 100, 0, pkg.AttributeStatusPassed, 0.024893587674442153},
+		{"attr 188 transformed value 101", 188, 100, 101, 0, pkg.AttributeStatusFailedScrutiny, 0.10044174089362015},
+		//raw value 1 falls in the [1, 4] bucket rather than between buckets
+		{"attr 5 raw value 0", 5, 100, 0, 0, pkg.AttributeStatusPassed, 0.025169175350572493},
+		{"attr 5 raw value 1", 5, 100, 0, 1, pkg.AttributeStatusPassed, 0.027432608477803388},
+		{"attr 5 raw value 5", 5, 100, 0, 5, pkg.AttributeStatusPassed, 0.07501976284584981},
+		{"attr 5 raw value 17", 5, 100, 0, 17, pkg.AttributeStatusFailedScrutiny, 0.23589260654405794},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			//test
+			attribute := measurements.SmartAtaAttribute{
+				AttributeId:      testCase.attributeId,
+				Value:            testCase.value,
+				RawValue:         testCase.rawValue,
+				TransformedValue: testCase.transformedValue,
+			}
+			attribute.ValidateThreshold()
+
+			//assert
+			require.Equal(t, testCase.expectedStatus, attribute.Status)
+			require.Equal(t, testCase.expectedRate, attribute.FailureRate)
+		})
+	}
 }

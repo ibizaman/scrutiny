@@ -20,9 +20,9 @@ import (
 	"github.com/analogj/scrutiny/webapp/backend/pkg/models/measurements"
 	"github.com/analogj/scrutiny/webapp/backend/pkg/thresholds"
 	"github.com/gin-gonic/gin"
+	"github.com/gofrs/uuid/v5"
 	"github.com/nicholas-fedor/shoutrrr"
 	shoutrrrTypes "github.com/nicholas-fedor/shoutrrr/pkg/types"
-	"github.com/gofrs/uuid/v5"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
 )
@@ -44,15 +44,16 @@ func ShouldNotify(logger logrus.FieldLogger, device models.Device, smartAttrs me
 	// setup constants for comparison
 	var requiredDeviceStatus pkg.DeviceStatus
 	var requiredAttrStatus pkg.AttributeStatus
-	if statusThreshold == pkg.MetricsStatusThresholdBoth {
+	switch statusThreshold {
+	case pkg.MetricsStatusThresholdBoth:
 		// either scrutiny or smart failures should trigger an email
 		requiredDeviceStatus = pkg.DeviceStatusSet(pkg.DeviceStatusFailedSmart, pkg.DeviceStatusFailedScrutiny)
 		requiredAttrStatus = pkg.AttributeStatusSet(pkg.AttributeStatusFailedSmart, pkg.AttributeStatusFailedScrutiny)
-	} else if statusThreshold == pkg.MetricsStatusThresholdSmart {
+	case pkg.MetricsStatusThresholdSmart:
 		//only smart failures
 		requiredDeviceStatus = pkg.DeviceStatusFailedSmart
 		requiredAttrStatus = pkg.AttributeStatusFailedSmart
-	} else {
+	default:
 		requiredDeviceStatus = pkg.DeviceStatusFailedScrutiny
 		requiredAttrStatus = pkg.AttributeStatusFailedScrutiny
 	}
@@ -101,8 +102,8 @@ func ShouldNotify(logger logrus.FieldLogger, device models.Device, smartAttrs me
 	var lastPoints []measurements.Smart
 	var err error
 	if !repeatNotifications {
-		lastPoints, err = deviceRepo.GetSmartAttributeHistory(c, scrutiny_uuid, database.DURATION_KEY_FOREVER, 1, 1, failingAttributes)
-		if err == nil || len(lastPoints) < 1 {
+		lastPoints, err = deviceRepo.GetSmartAttributeHistory(c, scrutiny_uuid, database.DURATION_KEY_FOREVER, 0, 1, 1, failingAttributes)
+		if err != nil || len(lastPoints) < 1 {
 			logger.Warningln("Could not get the most recent data points from the database. This is expected to happen only if this is the very first submission of data for the device.")
 		}
 	}
@@ -114,7 +115,7 @@ func ShouldNotify(logger logrus.FieldLogger, device models.Device, smartAttrs me
 			}
 			// This is checked again here to avoid repeating the entire for loop in the check above.
 			// Probably unnoticeably worse performance, but cleaner code.
-			if err != nil || len(lastPoints) < 1 || lastPoints[0].Attributes[attrId].GetTransformedValue() != smartAttrs.Attributes[attrId].GetTransformedValue() {
+			if err != nil || len(lastPoints) < 1 || lastPoints[0].Attributes[attrId].GetComparableValue() != smartAttrs.Attributes[attrId].GetComparableValue() {
 				return true
 			}
 		}

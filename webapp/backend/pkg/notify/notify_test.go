@@ -193,6 +193,26 @@ func TestShouldNotify_MetricsStatusFilterAttributesCritical_MetricsStatusThresho
 	//assert
 	require.False(t, ShouldNotify(logrus.StandardLogger(), device, smartAttrs, scrutinyUUID, statusThreshold, notifyFilterAttributes, true, &gin.Context{}, fakeDatabase))
 }
+func TestShouldNotify_MetricsStatusFilterAttributesCritical_MetricsStatusThresholdSmart_NvmeCriticalWarning(t *testing.T) {
+	t.Parallel()
+	//setup
+	device := models.Device{
+		DeviceProtocol: pkg.DeviceProtocolNvme,
+		DeviceStatus:   pkg.DeviceStatusSet(pkg.DeviceStatusFailedSmart, pkg.DeviceStatusFailedScrutiny),
+	}
+	smartAttrs := measurements.Smart{Attributes: map[string]measurements.SmartAttribute{
+		"critical_warning": (&measurements.SmartNvmeAttribute{AttributeId: "critical_warning", Value: 1, Threshold: 0}).PopulateAttributeStatus(),
+	}}
+	statusThreshold := pkg.MetricsStatusThresholdSmart
+	notifyFilterAttributes := pkg.MetricsStatusFilterAttributesCritical
+	scrutinyUUID := uuid.Must(uuid.NewV4())
+	mockCtrl := gomock.NewController(t)
+	fakeDatabase := mock_database.NewMockDeviceRepo(mockCtrl)
+
+	//assert
+	require.True(t, ShouldNotify(logrus.StandardLogger(), device, smartAttrs, scrutinyUUID, statusThreshold, notifyFilterAttributes, true, &gin.Context{}, fakeDatabase))
+}
+
 func TestShouldNotify_NoRepeat_DatabaseFailure(t *testing.T) {
 	t.Parallel()
 	//setup
@@ -209,7 +229,7 @@ func TestShouldNotify_NoRepeat_DatabaseFailure(t *testing.T) {
 	scrutinyUUID := uuid.Must(uuid.NewV4())
 	mockCtrl := gomock.NewController(t)
 	fakeDatabase := mock_database.NewMockDeviceRepo(mockCtrl)
-	fakeDatabase.EXPECT().GetSmartAttributeHistory(&gin.Context{}, scrutinyUUID, database.DURATION_KEY_FOREVER, 1, 1, []string{"5"}).Return([]measurements.Smart{}, errors.New("")).Times(1)
+	fakeDatabase.EXPECT().GetSmartAttributeHistory(&gin.Context{}, scrutinyUUID, database.DURATION_KEY_FOREVER, time.Duration(0), 1, 1, []string{"5"}).Return([]measurements.Smart{}, errors.New("")).Times(1)
 
 	//assert
 	require.True(t, ShouldNotify(logrus.StandardLogger(), device, smartAttrs, scrutinyUUID, statusThreshold, notifyFilterAttributes, false, &gin.Context{}, fakeDatabase))
@@ -231,7 +251,7 @@ func TestShouldNotify_NoRepeat_NoDatabaseData(t *testing.T) {
 	scrutinyUUID := uuid.Must(uuid.NewV4())
 	mockCtrl := gomock.NewController(t)
 	fakeDatabase := mock_database.NewMockDeviceRepo(mockCtrl)
-	fakeDatabase.EXPECT().GetSmartAttributeHistory(&gin.Context{}, scrutinyUUID, database.DURATION_KEY_FOREVER, 1, 1, []string{"5"}).Return([]measurements.Smart{}, nil).Times(1)
+	fakeDatabase.EXPECT().GetSmartAttributeHistory(&gin.Context{}, scrutinyUUID, database.DURATION_KEY_FOREVER, time.Duration(0), 1, 1, []string{"5"}).Return([]measurements.Smart{}, nil).Times(1)
 
 	//assert
 	require.True(t, ShouldNotify(logrus.StandardLogger(), device, smartAttrs, scrutinyUUID, statusThreshold, notifyFilterAttributes, false, &gin.Context{}, fakeDatabase))
@@ -253,10 +273,142 @@ func TestShouldNotify_NoRepeat(t *testing.T) {
 	scrutinyUUID := uuid.Must(uuid.NewV4())
 	mockCtrl := gomock.NewController(t)
 	fakeDatabase := mock_database.NewMockDeviceRepo(mockCtrl)
-	fakeDatabase.EXPECT().GetSmartAttributeHistory(&gin.Context{}, scrutinyUUID, database.DURATION_KEY_FOREVER, 1, 1, []string{"5"}).Return([]measurements.Smart{smartAttrs}, nil).Times(1)
+	fakeDatabase.EXPECT().GetSmartAttributeHistory(&gin.Context{}, scrutinyUUID, database.DURATION_KEY_FOREVER, time.Duration(0), 1, 1, []string{"5"}).Return([]measurements.Smart{smartAttrs}, nil).Times(1)
 
 	//assert
 	require.False(t, ShouldNotify(logrus.StandardLogger(), device, smartAttrs, scrutinyUUID, statusThreshold, notifyFilterAttributes, false, &gin.Context{}, fakeDatabase))
+}
+
+// attr 199 is thresholded on its raw value and has no Transform, so TransformedValue stays 0 for both submissions
+func TestShouldNotify_NoRepeat_ChangedRawValue(t *testing.T) {
+	t.Parallel()
+	//setup
+	device := models.Device{
+		DeviceStatus: pkg.DeviceStatusFailedScrutiny,
+	}
+	previousAttrs := measurements.Smart{Attributes: map[string]measurements.SmartAttribute{
+		"199": &measurements.SmartAtaAttribute{
+			AttributeId: 199,
+			RawValue:    108,
+			Status:      pkg.AttributeStatusFailedScrutiny,
+		},
+	}}
+	smartAttrs := measurements.Smart{Attributes: map[string]measurements.SmartAttribute{
+		"199": &measurements.SmartAtaAttribute{
+			AttributeId: 199,
+			RawValue:    120,
+			Status:      pkg.AttributeStatusFailedScrutiny,
+		},
+	}}
+	statusThreshold := pkg.MetricsStatusThresholdBoth
+	notifyFilterAttributes := pkg.MetricsStatusFilterAttributesAll
+	scrutinyUUID := uuid.Must(uuid.NewV4())
+	mockCtrl := gomock.NewController(t)
+	fakeDatabase := mock_database.NewMockDeviceRepo(mockCtrl)
+	fakeDatabase.EXPECT().GetSmartAttributeHistory(&gin.Context{}, scrutinyUUID, database.DURATION_KEY_FOREVER, time.Duration(0), 1, 1, []string{"199"}).Return([]measurements.Smart{previousAttrs}, nil).Times(1)
+
+	//assert
+	require.True(t, ShouldNotify(logrus.StandardLogger(), device, smartAttrs, scrutinyUUID, statusThreshold, notifyFilterAttributes, false, &gin.Context{}, fakeDatabase))
+}
+
+func TestShouldNotify_NoRepeat_UnchangedRawValue(t *testing.T) {
+	t.Parallel()
+	//setup
+	device := models.Device{
+		DeviceStatus: pkg.DeviceStatusFailedScrutiny,
+	}
+	previousAttrs := measurements.Smart{Attributes: map[string]measurements.SmartAttribute{
+		"199": &measurements.SmartAtaAttribute{
+			AttributeId: 199,
+			RawValue:    108,
+			Status:      pkg.AttributeStatusFailedScrutiny,
+		},
+	}}
+	smartAttrs := measurements.Smart{Attributes: map[string]measurements.SmartAttribute{
+		"199": &measurements.SmartAtaAttribute{
+			AttributeId: 199,
+			RawValue:    108,
+			Status:      pkg.AttributeStatusFailedScrutiny,
+		},
+	}}
+	statusThreshold := pkg.MetricsStatusThresholdBoth
+	notifyFilterAttributes := pkg.MetricsStatusFilterAttributesAll
+	scrutinyUUID := uuid.Must(uuid.NewV4())
+	mockCtrl := gomock.NewController(t)
+	fakeDatabase := mock_database.NewMockDeviceRepo(mockCtrl)
+	fakeDatabase.EXPECT().GetSmartAttributeHistory(&gin.Context{}, scrutinyUUID, database.DURATION_KEY_FOREVER, time.Duration(0), 1, 1, []string{"199"}).Return([]measurements.Smart{previousAttrs}, nil).Times(1)
+
+	//assert
+	require.False(t, ShouldNotify(logrus.StandardLogger(), device, smartAttrs, scrutinyUUID, statusThreshold, notifyFilterAttributes, false, &gin.Context{}, fakeDatabase))
+}
+
+// attr 5 displays its raw value, but a manufacturer SMART failure is judged on the normalized value
+func TestShouldNotify_NoRepeat_ChangedNormalizedValueSmartFailure(t *testing.T) {
+	t.Parallel()
+	//setup
+	device := models.Device{
+		DeviceStatus: pkg.DeviceStatusFailedSmart,
+	}
+	previousAttrs := measurements.Smart{Attributes: map[string]measurements.SmartAttribute{
+		"5": &measurements.SmartAtaAttribute{
+			AttributeId: 5,
+			Value:       8,
+			Threshold:   10,
+			RawValue:    200,
+			WhenFailed:  "now",
+			Status:      pkg.AttributeStatusFailedSmart,
+		},
+	}}
+	smartAttrs := measurements.Smart{Attributes: map[string]measurements.SmartAttribute{
+		"5": &measurements.SmartAtaAttribute{
+			AttributeId: 5,
+			Value:       5,
+			Threshold:   10,
+			RawValue:    200,
+			WhenFailed:  "now",
+			Status:      pkg.AttributeStatusFailedSmart,
+		},
+	}}
+	statusThreshold := pkg.MetricsStatusThresholdBoth
+	notifyFilterAttributes := pkg.MetricsStatusFilterAttributesAll
+	scrutinyUUID := uuid.Must(uuid.NewV4())
+	mockCtrl := gomock.NewController(t)
+	fakeDatabase := mock_database.NewMockDeviceRepo(mockCtrl)
+	fakeDatabase.EXPECT().GetSmartAttributeHistory(&gin.Context{}, scrutinyUUID, database.DURATION_KEY_FOREVER, time.Duration(0), 1, 1, []string{"5"}).Return([]measurements.Smart{previousAttrs}, nil).Times(1)
+
+	//assert
+	require.True(t, ShouldNotify(logrus.StandardLogger(), device, smartAttrs, scrutinyUUID, statusThreshold, notifyFilterAttributes, false, &gin.Context{}, fakeDatabase))
+}
+
+func TestShouldNotify_NoRepeat_ChangedNvmeValue(t *testing.T) {
+	t.Parallel()
+	//setup
+	device := models.Device{
+		DeviceStatus: pkg.DeviceStatusFailedScrutiny,
+	}
+	previousAttrs := measurements.Smart{Attributes: map[string]measurements.SmartAttribute{
+		"media_errors": &measurements.SmartNvmeAttribute{
+			AttributeId: "media_errors",
+			Value:       3,
+			Status:      pkg.AttributeStatusFailedScrutiny,
+		},
+	}}
+	smartAttrs := measurements.Smart{Attributes: map[string]measurements.SmartAttribute{
+		"media_errors": &measurements.SmartNvmeAttribute{
+			AttributeId: "media_errors",
+			Value:       5,
+			Status:      pkg.AttributeStatusFailedScrutiny,
+		},
+	}}
+	statusThreshold := pkg.MetricsStatusThresholdBoth
+	notifyFilterAttributes := pkg.MetricsStatusFilterAttributesAll
+	scrutinyUUID := uuid.Must(uuid.NewV4())
+	mockCtrl := gomock.NewController(t)
+	fakeDatabase := mock_database.NewMockDeviceRepo(mockCtrl)
+	fakeDatabase.EXPECT().GetSmartAttributeHistory(&gin.Context{}, scrutinyUUID, database.DURATION_KEY_FOREVER, time.Duration(0), 1, 1, []string{"media_errors"}).Return([]measurements.Smart{previousAttrs}, nil).Times(1)
+
+	//assert
+	require.True(t, ShouldNotify(logrus.StandardLogger(), device, smartAttrs, scrutinyUUID, statusThreshold, notifyFilterAttributes, false, &gin.Context{}, fakeDatabase))
 }
 
 func TestNewPayload(t *testing.T) {
